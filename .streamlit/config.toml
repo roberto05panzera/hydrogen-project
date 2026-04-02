@@ -1,1 +1,10 @@
-#Placeholder  ← Theme, layout settings
+[theme]
+primaryColor = "#065A82"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F0F2F6"
+textColor = "#1E2761"
+font = "sans serif"
+
+[server]
+headless = true
+
