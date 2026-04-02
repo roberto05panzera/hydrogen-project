@@ -1,4 +1,5 @@
 import stramlit as st
+st.write ("Hooray, we connected everything")
 print("Hoi zm")
 x = 5
 y = 2
