@@ -1,0 +1,102 @@
+# this is the API that retrieves Carbon-Intensity data
+
+# Vorbereitungen: Importe für Zeitformate und für API-requests
+import schedule
+import time
+from datetime import datetime, timedelta, timezone
+import requests
+import pytz
+
+# API-Key: wird für die Authentifizierung bei den API-Anfragen verwendet
+API_KEY_MAP = "6RnXGDnACcJRjhhzKd9P"
+
+# Diese Liste verwenden wir später, um durch einen for-Loop die Daten zu den einzelnen Regionen abzufragen.
+REGIONS = ["AU-SA", "AU-VIC", "AU-NSW", "AU-NT", "AU-QLD", "AU-TAS", "AU-WA"]
+
+# Wir müssen beachten, dass Australien in verschiedene Zeitzonen unterteilt ist.
+REGION_TIMEZONES = {
+    "AU-SA":  "Australia/Adelaide",     # UTC+9:30
+    "AU-VIC": "Australia/Melbourne",    # UTC+10
+    "AU-NSW": "Australia/Sydney",       # UTC+10
+    "AU-NT":  "Australia/Darwin",       # UTC+9:30
+    "AU-QLD": "Australia/Brisbane",     # UTC+10
+    "AU-TAS": "Australia/Hobart",       # UTC+10
+    "AU-WA":  "Australia/Perth"         # UTC+8
+}
+
+##########################################################################################################################################
+
+# In dieser Klasse werden sämtliche abgerufene API-Daten gespeichert, welche mit Carbon Intensity zu tun haben.
+class CarbonIntensity_AU:
+    
+    # Wenn ein neues Objekt erstellt wird, bekommt es ein leeres Dictionary data
+    def __init__(self):
+        self.storage = {}
+
+    # Formatiert alle gespeicherten Daten schön für die Ausgabe mit print().
+    def __str__(self):
+        output = ""
+        for region, entries in self.storage.items():
+            output += f"\n── {region} ──\n"
+            for dt, ci in sorted(entries.items()):
+                output += f"  {dt.strftime('%d.%m.%Y %H:%M')} → {ci} gCO2eq/kWh\n"
+        return output
+    
+au_ci = CarbonIntensity_AU()
+
+##########################################################################################################################################
+
+# Funktion aktualisiert alle 5 Minuten die Carbon Intensity
+def retrieve_latest_data():
+    """Holt den aktuellsten Wert für alle Regionen"""
+
+    url = "https://api.electricitymap.org/v4/carbon-intensity/latest"
+    headers = {"auth-token": API_KEY_MAP}
+
+    for region in REGIONS:
+        params = {"zone": region,"temporalGranularity": "5_minutes"}
+        response = requests.get(url, headers=headers, params=params)
+
+        # Prüft, ob API-Anfrage erfolgreich war
+        if response.status_code == 200:
+            api_response = response.json()      # API-Antwort wird in ein lesbares Python-Dictionary umgewandelt.
+
+            # API timestamp (UTC)
+            api_dt = datetime.fromisoformat(api_response["datetime"].replace("Z", "+00:00")).astimezone(timezone.utc)
+
+            # Lokaler timestamp (lokale Zeit AU)
+            tz = pytz.timezone(REGION_TIMEZONES[region])
+            region_dt = api_dt.astimezone(tz)
+            
+            # Der gesuchte Wert (Carbon Intensity) wird aus der API-Response geholt
+            ci = api_response["carbonIntensity"]
+
+            # Speichern einer neuen Region im Dictionary
+            if region not in au_ci.storage:
+                au_ci.storage[region] = {}
+
+            # Regionale Zeit wird als Key verwendet
+            au_ci.storage[region][region_dt] = ci
+
+            print(
+                f"✓ {region} | "
+                f"Lokalzeit & -datum: {region_dt.strftime('%d.%m.%Y %H:%M')} → "
+                f"{ci} gCO2eq/kWh"
+            )
+
+        # Falls API-Anfrage nicht erfolgreich war, erfährt User hier, wo der Fehler liegt.
+        else:
+            print(f"✗ Fehler {region}: {response.status_code}")
+
+# Erste Datenerhebung sofort durchführen
+retrieve_latest_data()
+
+# Scheduler: alle 5 Minuten latest abrufen
+schedule.every(5).minutes.do(retrieve_latest_data)
+
+print("▶ Scheduler gestartet: Daten werden alle 5 Minuten aktualisiert")
+
+while True:
+    schedule.run_pending()
+    time.sleep(30)  # alle 30 Sekunden prüfen ob ein Job fällig ist
+   
