@@ -34,7 +34,7 @@ from utils.helpers import (
 )
 
 # ---------- Page config ----------
-st.set_page_config(page_title="Production Optimizer", page_icon="🔧", layout="wide")
+st.set_page_config(page_title="Production Optimizer", layout="wide")
 inject_custom_css()
 
 # ---------- Sidebar ----------
@@ -57,7 +57,7 @@ st.markdown(
     '03 Apr 2026  |  AEMO NEM  |  AUD</div>',
     unsafe_allow_html=True,
 )
-st.title("🔧 Production Optimizer")
+st.title("Production Optimizer")
 
 # ---------- Check if forecast data is available ----------
 if "price_forecast" not in st.session_state:
