@@ -181,7 +181,7 @@ def draw_indicator_modal():
         ),
         yaxis=dict(
             title="AUD/MWh",
-            titlefont=dict(color=COLORS["text_muted"], size=10),
+            title_font=dict(color=COLORS["text_muted"], size=10),
             gridcolor=COLORS["border_light"],
             gridwidth=0.5,
             zeroline=True,
@@ -442,7 +442,7 @@ def render():
             # Y-axis styling
             yaxis=dict(
                 title="AUD/MWh",
-                titlefont=dict(color=COLORS["text_muted"], size=10),
+                title_font=dict(color=COLORS["text_muted"], size=10),
                 gridcolor=COLORS["border_light"],   # subtle horizontal grid
                 gridwidth=0.5,
                 zeroline=True,                  # show the zero line
