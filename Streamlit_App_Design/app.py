@@ -12,11 +12,6 @@ All visual styling is handled by style.py (imported below).
 All reusable UI components live in components.py.
 Each page has its own file in the pages/ folder.
 """
-#st.set_page_config(layout="wide", page_title="H2 Optimizer") — must be the very first Streamlit call
-#st.sidebar — for the navigation panel
-#st.markdown(..., unsafe_allow_html=True) — for injecting custom CSS (Cascading Sysle Sheets)
-#st.columns() — for grid layouts (cards side by side)
-#@st.dialog("Title") — for click-to-expand modals (this is important for the grading criterion on user interaction)
 
 # ── Imports ──────────────────────────────────────────────────────────
 # Streamlit is the web framework that turns this Python script into
@@ -25,16 +20,19 @@ import streamlit as st
 from datetime import datetime
 
 # Our own files (same folder):
-from Streamlit_App_Design.style import inject_css, COLORS          # visual styling
+from style import inject_css, COLORS          # visual styling
 # from components import top_bar              # uncomment once components.py is built
 
 # Page modules — each file contains a render() function that draws
 # one full page.  We import them here so we can call the right one
 # based on which sidebar link the user clicked.
-from pages import market_overview
-from pages import price_forecast
-from pages import production_optimizer
-from pages import cost_analysis
+# NOTE: the folder is called "views" (not "pages") because Streamlit
+# auto-detects a folder named "pages" and tries to use its own
+# multi-page system, which conflicts with our manual routing.
+from views import market_overview
+from views import price_forecast
+from views import production_optimizer
+from views import cost_analysis
 
 
 # ── 1. Page Configuration ───────────────────────────────────────────
@@ -42,6 +40,7 @@ from pages import cost_analysis
 # If you put any other st.* call before this, Streamlit will crash.
 st.set_page_config(
     page_title="H2 Optimizer",           # text shown in the browser tab
+    page_icon="⚡",                       # icon in the browser tab
     layout="wide",                        # use the full width of the screen
     initial_sidebar_state="expanded",     # sidebar open by default
 )
@@ -49,7 +48,7 @@ st.set_page_config(
 
 # ── 2. Inject Custom CSS ────────────────────────────────────────────
 # Streamlit's default look is white/light.  We override it with our
-# theme by injecting CSS.  See style.py for details.
+# dark finance theme by injecting CSS.  See style.py for details.
 inject_css()
 
 
@@ -67,7 +66,7 @@ with st.sidebar:
         f"""
         <div style="padding: 0.5rem 0 1.2rem 0;">
             <span style="font-size: 1.5rem; font-weight: 700; color: {COLORS['accent']};">
-                H2 Optimizer
+                ⚡ H2 Optimizer
             </span>
             <br>
             <span style="font-size: 0.75rem; color: {COLORS['text_secondary']};">
