@@ -13,7 +13,7 @@ the same.
 
 import streamlit as st
 import plotly.graph_objects as go          # Plotly for interactive charts
-from Streamlit_App_Design.style import COLORS
+from style import COLORS
 from components import metric_card, dashboard_card, stats_row
 
 # Import our placeholder data.

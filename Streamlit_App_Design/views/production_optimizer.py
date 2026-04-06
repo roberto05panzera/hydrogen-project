@@ -9,7 +9,7 @@ Will show:
 """
 
 import streamlit as st
-from Streamlit_App_Design.style import COLORS
+from style import COLORS
 
 
 def render():
