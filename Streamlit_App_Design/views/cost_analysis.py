@@ -132,8 +132,48 @@ def render():
         Expanded view: donut chart + a breakdown table with exact
         amounts and percentages for each category.
         """
-        # Re-draw the donut at a larger size
-        draw_donut()
+        # Re-draw the donut inside the modal.
+        # NOTE: We can't call draw_donut() directly because it uses
+        # key="cost_donut" which already exists on the main page.
+        # Streamlit requires every element key to be unique, so we
+        # rebuild the chart here with a different key.
+        fig_donut_modal = go.Figure()
+        fig_donut_modal.add_trace(go.Pie(
+            labels=cost_df["category"],
+            values=cost_df["cost_aud"],
+            hole=0.55,
+            marker=dict(
+                colors=[
+                    COLORS["accent"], COLORS["cyan"], COLORS["orange"],
+                    COLORS["yellow"], COLORS["text_secondary"], COLORS["border"],
+                ],
+                line=dict(color=COLORS["bg"], width=2),
+            ),
+            textinfo="label+percent",
+            textfont=dict(size=10, color=COLORS["text_primary"]),
+            hovertemplate=(
+                "<b>%{label}</b><br>$%{value:,.0f} AUD<br>%{percent}<br><extra></extra>"
+            ),
+        ))
+        fig_donut_modal.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font=dict(color=COLORS["text_muted"], size=11),
+            margin=dict(l=20, r=20, t=20, b=20),
+            height=340,
+            showlegend=False,
+            annotations=[dict(
+                text=(
+                    "<b>$" + f"{total_cost:,.0f}" + "</b><br>"
+                    "<span style='font-size:10px;color:" + COLORS["text_muted"] + "'>"
+                    "Total AUD</span>"
+                ),
+                x=0.5, y=0.5,
+                font=dict(size=16, color=COLORS["text_primary"]),
+                showarrow=False,
+            )],
+        )
+        st.plotly_chart(fig_donut_modal, use_container_width=True, key="modal_cost_donut")
 
         # ── Detailed breakdown table ──
         # Show each category with its cost, percentage of total,
