@@ -270,9 +270,221 @@ def render():
 
         st.plotly_chart(fig, use_container_width=True, key="forecast_chart")
 
-    # Wrap the chart in a dashboard card with a title bar.
-    # modal_content_func will be added in Step 3.
+    # ==============================================================
+    # STEP 3: FORECAST DETAIL MODAL
+    # ==============================================================
+    # When the user clicks "Expand" on the forecast card, this modal
+    # opens.  It adds interactive controls on top of the base chart:
+    #   - Horizon selector (24h / 48h / 72h) — re-fetches forecast
+    #     with a different horizon, so the confidence band changes
+    #   - A bigger version of the chart with the selected horizon
+    #   - An error-distribution mini-chart (residuals histogram)
+    #   - A stats row summarising the model's accuracy
+    #
+    # Each control is an interaction point for grading.
+
+    def draw_forecast_modal():
+        """
+        Draw the expanded forecast modal content.
+        Called inside a @st.dialog popup when the user clicks Expand.
+        """
+
+        # ── Horizon selector ──
+        # Lets the user change how far ahead the model forecasts.
+        # A longer horizon = wider confidence band = more uncertainty.
+        horizon_label = st.radio(
+            label="Forecast Horizon",
+            options=["24 h", "48 h", "72 h"],
+            index=1,                               # default: 48 h
+            horizontal=True,
+            key="modal_horizon_selector",
+        )
+
+        # Convert label to integer hours: "48 h" → 48
+        horizon_hours = int(horizon_label.split()[0])
+
+        # Re-fetch forecast data with the user's chosen horizon.
+        # This may differ from the main card's 48 h default.
+        modal_forecast = get_forecast(
+            model_name=model_key,
+            horizon_hours=horizon_hours,
+        )
+
+        # Unpack the modal forecast data
+        m_ts         = modal_forecast["timestamps"]
+        m_actual     = modal_forecast["actual"]
+        m_predicted  = modal_forecast["predicted"]
+        m_lower      = modal_forecast["lower_bound"]
+        m_upper      = modal_forecast["upper_bound"]
+        m_hist       = modal_forecast["hist_hours"]
+        m_metrics    = modal_forecast["metrics"]
+
+        # ── Build the expanded chart (same layers as Step 2) ──
+        fig_modal = go.Figure()
+
+        # Confidence band — upper bound (invisible)
+        fig_modal.add_trace(go.Scatter(
+            x=m_ts, y=m_upper,
+            mode="lines", line=dict(width=0),
+            showlegend=False, hoverinfo="skip", name="Upper CI",
+        ))
+
+        # Confidence band — lower bound + fill
+        fig_modal.add_trace(go.Scatter(
+            x=m_ts, y=m_lower,
+            mode="lines", line=dict(width=0),
+            fill="tonexty",
+            fillcolor="rgba(0,102,255,0.10)",
+            showlegend=False, hoverinfo="skip", name="Lower CI",
+        ))
+
+        # Actual prices (historical only)
+        fig_modal.add_trace(go.Scatter(
+            x=m_ts[:m_hist], y=m_actual[:m_hist],
+            mode="lines", name="Actual",
+            line=dict(color=COLORS["text_primary"], width=1.5),
+        ))
+
+        # Predicted prices (full range)
+        fig_modal.add_trace(go.Scatter(
+            x=m_ts, y=m_predicted,
+            mode="lines", name="Predicted",
+            line=dict(color=COLORS["accent"], width=2, dash="dash"),
+        ))
+
+        # "Now" divider — manual vertical line (same approach as Step 2)
+        now_ts_modal = m_ts[m_hist]
+        all_vals_modal = m_actual[:m_hist] + m_predicted
+        y_min_m = min(all_vals_modal) - 5
+        y_max_m = max(all_vals_modal) + 5
+
+        fig_modal.add_trace(go.Scatter(
+            x=[now_ts_modal, now_ts_modal],
+            y=[y_min_m, y_max_m],
+            mode="lines",
+            line=dict(color=COLORS["yellow"], width=1, dash="dash"),
+            showlegend=False, hoverinfo="skip", name="Now",
+        ))
+        fig_modal.add_annotation(
+            x=now_ts_modal, y=y_max_m, text="Now",
+            showarrow=False,
+            font=dict(color=COLORS["yellow"], size=10),
+            yshift=10,
+        )
+
+        # Chart styling
+        fig_modal.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font=dict(color=COLORS["text_muted"], size=11),
+            margin=dict(l=50, r=20, t=30, b=40),
+            height=380,
+            xaxis=dict(
+                showgrid=False,
+                linecolor=COLORS["border"],
+                tickfont=dict(color=COLORS["text_muted"], size=10),
+            ),
+            yaxis=dict(
+                title="AUD/MWh",
+                title_font=dict(color=COLORS["text_muted"], size=10),
+                gridcolor=COLORS["border_light"],
+                gridwidth=0.5,
+                zeroline=True,
+                zerolinecolor=COLORS["border"],
+                zerolinewidth=0.5,
+                tickfont=dict(color=COLORS["text_muted"], size=10),
+            ),
+            legend=dict(
+                orientation="h", yanchor="bottom", y=1.02,
+                xanchor="left", x=0, font=dict(size=10),
+            ),
+            hovermode="x unified",
+        )
+
+        st.plotly_chart(fig_modal, use_container_width=True, key="modal_forecast_chart")
+
+        # ── Error distribution histogram ──
+        # Shows how the model's prediction errors are distributed
+        # across the historical period.  A tight bell curve centred
+        # around zero = good model.  Wide or skewed = poor model.
+        import numpy as np                         # needed for residuals
+        residuals = (
+            np.array(m_actual[:m_hist]) - np.array(m_predicted[:m_hist])
+        )
+
+        fig_hist = go.Figure()
+        fig_hist.add_trace(go.Histogram(
+            x=residuals,
+            nbinsx=30,                             # number of bars
+            marker_color=COLORS["accent"],
+            opacity=0.7,
+            name="Residuals",
+        ))
+
+        fig_hist.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font=dict(color=COLORS["text_muted"], size=10),
+            margin=dict(l=40, r=20, t=25, b=30),
+            height=200,
+            xaxis=dict(
+                title="Prediction Error (AUD/MWh)",
+                title_font=dict(size=10, color=COLORS["text_muted"]),
+                gridcolor=COLORS["border_light"],
+                gridwidth=0.5,
+                tickfont=dict(color=COLORS["text_muted"], size=9),
+            ),
+            yaxis=dict(
+                title="Count",
+                title_font=dict(size=10, color=COLORS["text_muted"]),
+                gridcolor=COLORS["border_light"],
+                gridwidth=0.5,
+                tickfont=dict(color=COLORS["text_muted"], size=9),
+            ),
+            showlegend=False,
+        )
+
+        st.markdown(
+            f'<div style="font-size:0.8rem;font-weight:600;'
+            f'color:{COLORS["text_primary"]};margin:0.8rem 0 0.3rem 0;">'
+            f'Error Distribution (Historical Period)</div>',
+            unsafe_allow_html=True,
+        )
+        st.plotly_chart(fig_hist, use_container_width=True, key="modal_error_hist")
+
+        # ── Stats row at the bottom ──
+        # Quick summary of model accuracy for the selected horizon.
+        stats_row([
+            {
+                "label": "RMSE",
+                "value": f"{m_metrics['rmse']:.2f}",
+                "subtitle": "AUD/MWh",
+                "color": COLORS["green"] if m_metrics["rmse"] < 10 else COLORS["orange"],
+            },
+            {
+                "label": "MAE",
+                "value": f"{m_metrics['mae']:.2f}",
+                "subtitle": "AUD/MWh",
+                "color": COLORS["green"] if m_metrics["mae"] < 8 else COLORS["orange"],
+            },
+            {
+                "label": "R²",
+                "value": f"{m_metrics['r2']:.3f}",
+                "subtitle": "1.0 = perfect",
+                "color": COLORS["green"] if m_metrics["r2"] > 0.7 else COLORS["orange"],
+            },
+            {
+                "label": "HORIZON",
+                "value": f"{horizon_hours}h",
+                "subtitle": f"{horizon_hours // 24}d look-ahead",
+                "color": COLORS["accent"],
+            },
+        ])
+
+    # ── Wrap the chart in a dashboard card, now with the modal ──
     dashboard_card(
         title=f"Price Forecast — {model_display} ({metrics['horizon_hours']}h horizon)",
         content_func=draw_forecast_chart,
+        modal_title=f"Price Forecast — {model_display} (Detailed View)",
+        modal_content_func=draw_forecast_modal,
     )
