@@ -9,7 +9,9 @@ The utils/ folder contains shared logic (API calls, ML model, optimizer).
 """
 
 import streamlit as st
-from utils.helpers import (
+
+#Here we import reusable functions that are part of the app design that are defined in the components file
+from Streamlit_App_Design.components import (
     inject_custom_css,
     render_kpi_bar,
     render_status_bar,
