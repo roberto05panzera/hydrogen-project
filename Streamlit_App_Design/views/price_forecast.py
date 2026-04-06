@@ -196,15 +196,36 @@ def render():
         # A vertical dashed line marking where history ends and the
         # forecast begins.  This is the most important visual cue —
         # everything to the right is a prediction, not real data.
+        #
+        # NOTE: We draw this manually with go.Scatter instead of
+        # fig.add_vline() because add_vline's annotation parameter
+        # crashes on newer Plotly + Python 3.14 (it tries to call
+        # sum() on datetime objects).  A manual trace is more robust.
         now_ts = ts[hist_hours]                    # timestamp at the boundary
-        fig.add_vline(
+
+        # Find the y-axis range so the vertical line spans the full chart
+        all_vals = actual[:hist_hours] + predicted
+        y_min = min(all_vals) - 5
+        y_max = max(all_vals) + 5
+
+        fig.add_trace(go.Scatter(
+            x=[now_ts, now_ts],                    # same x = vertical line
+            y=[y_min, y_max],                      # spans full y range
+            mode="lines",
+            line=dict(color=COLORS["yellow"], width=1, dash="dash"),
+            showlegend=False,
+            hoverinfo="skip",
+            name="Now",
+        ))
+
+        # Add a "Now" text label at the top of the divider line
+        fig.add_annotation(
             x=now_ts,
-            line_width=1,
-            line_dash="dash",
-            line_color=COLORS["yellow"],
-            annotation_text="Now",
-            annotation_position="top",
-            annotation_font=dict(color=COLORS["yellow"], size=10),
+            y=y_max,
+            text="Now",
+            showarrow=False,
+            font=dict(color=COLORS["yellow"], size=10),
+            yshift=10,                             # nudge label above chart
         )
 
         # ── Chart styling (dark theme) ──
