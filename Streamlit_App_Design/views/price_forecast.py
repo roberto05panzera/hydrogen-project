@@ -27,7 +27,8 @@ from components import metric_card, dashboard_card, stats_row
 from data.price_forecast_model import run_forecast
 
 # get_carbon_intensity() reads real CSV files from Electricity Maps.
-from data.sample_data import get_carbon_intensity
+# Moved to its own module so this page no longer depends on sample_data.
+from data.carbon_intensity_loader import get_carbon_intensity
 
 
 def render():
