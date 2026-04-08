@@ -87,7 +87,7 @@ with st.sidebar:
         label="Navigate",                                    # label for screen readers
         options=[
             "Market Overview",
-            "Price Forecast",
+            "Price Forecast & Carbon",
             "Production Optimizer",
             "Cost Analysis",
         ],
@@ -208,7 +208,7 @@ st.divider()
 if page == "Market Overview":
     market_overview.render()
 
-elif page == "Price Forecast":
+elif page == "Price Forecast & Carbon":
     price_forecast.render()
 
 elif page == "Production Optimizer":
