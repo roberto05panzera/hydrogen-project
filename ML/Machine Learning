@@ -1,156 +1,66 @@
-"""
-data/ml_model.py — ML functions used by app.py.
-
-Training is done separately by running:
-    python ml_model.py          (project root)
-
-This file loads the saved carbon_modelle.pkl and provides the three
-functions that app.py needs:
-    load_or_train_model(data_df, zone)
-    predict_next_7_days(model, history_df, zone)
-    find_optimal_production_windows(forecast_df, ...)
-"""
-
-import os
-import pickle
-import datetime
-import joblib
-
-import numpy as np
 import pandas as pd
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+import joblib
+from sklearn.ensemble import GradientBoostingRegressor
+from sklearn.metrics import mean_absolute_error, r2_score
 
-# ── Path to the trained models (saved by ml_model.py at project root) ─────────
-_HERE      = os.path.dirname(os.path.abspath(__file__))
-MODEL_PATH = os.path.join(_HERE, "..", "carbon_modelle.pkl")
+# ============================================================
+# 1. CSV-Dateien pro Region
+# ============================================================
 
-# ── Same 3 features used for training ─────────────────────────────────────────
-FEATURE_COLS = ["hour", "day_of_week", "month"]
-TARGET_COL   = "price_aud_mwh"      # live_data renames carbon_intensity → this
+csv_dateien = {
+    "AU-NSW": "data/carbon_nsw.csv",
+    "AU-VIC": "data/carbon_vic.csv",
+    "AU-QLD": "data/carbon_qld.csv",
+    "AU-SA":  "data/carbon_sa.csv",
+    "AU-TAS": "data/carbon_tas.csv",
+}
 
+modelle = {}
+ergebnisse = {}
 
-def _build_features(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
-    df["datetime"]    = pd.to_datetime(df["datetime"])
-    df["hour"]        = df["datetime"].dt.hour
-    df["day_of_week"] = df["datetime"].dt.weekday
-    df["month"]       = df["datetime"].dt.month
-    return df
+# ============================================================
+# 2. Für jede Region Modell trainieren
+# ============================================================
 
+for region, dateiname in csv_dateien.items():
+    df = pd.read_csv(dateiname)
 
-# ── Public API ─────────────────────────────────────────────────────────────────
+    df["datetime"] = pd.to_datetime(df["datetime"])
 
-def load_or_train_model(data_df: pd.DataFrame, zone: str):
-    """
-    Load the pre-trained model for *zone* from carbon_modelle.pkl.
-    Returns (model, metrics_dict, feature_importance_df).
-    """
-    if not os.path.exists(MODEL_PATH):
-        raise FileNotFoundError(
-            "carbon_modelle.pkl not found. "
-            "Please run  python ml_model.py  first to train the models."
-        )
+    df["hour"] = df["datetime"].dt.hour
+    df["day_of_week"] = df["datetime"].dt.dayofweek
+    df["month"] = df["datetime"].dt.month
 
-    modelle = joblib.load(MODEL_PATH)
+    X = df[["hour", "day_of_week", "month"]]
+    y = df["carbon_intensity"]
 
-    if zone not in modelle:
+    if len(df) < 120:
         raise ValueError(
-            f"No model found for zone '{zone}'. "
-            f"Available zones: {list(modelle.keys())}"
+            f"Zu wenig Daten in {dateiname}. Mindestens ca. 120 Zeilen nötig."
         )
 
-    model = modelle[zone]
+    X_train, X_test = X[:-100], X[-100:]
+    y_train, y_test = y[:-100], y[-100:]
 
-    # Evaluate on the held-out 20 %
-    df = _build_features(data_df[data_df["region"] == zone].copy())
-    df = df.dropna(subset=FEATURE_COLS + [TARGET_COL]).reset_index(drop=True)
+    model = GradientBoostingRegressor(random_state=42)
+    model.fit(X_train, y_train)
 
-    if len(df) < 200:
-        raise ValueError(f"Not enough historical data for zone {zone}.")
+    predictions = model.predict(X_test)
 
-    X = df[FEATURE_COLS]
-    y = df[TARGET_COL]
-    split    = int(len(df) * 0.80)
-    X_test   = X.iloc[split:]
-    y_test   = y.iloc[split:]
-    preds    = model.predict(X_test)
+    mae = mean_absolute_error(y_test, predictions)
+    r2 = r2_score(y_test, predictions)
 
-    metrics = {
-        "mae":           float(mean_absolute_error(y_test, preds)),
-        "rmse":          float(mean_squared_error(y_test, preds) ** 0.5),
-        "r2":            float(r2_score(y_test, preds)),
-        "horizon_hours": 168,
+    print(f"{region}: MAE = {mae:.2f} | R² = {r2:.3f}")
+
+    modelle[region] = model
+    ergebnisse[region] = {
+        "mae": mae,
+        "r2": r2
     }
 
-    feat_imp = pd.DataFrame({
-        "feature":    FEATURE_COLS,
-        "importance": model.feature_importances_,
-    }).sort_values("importance", ascending=False).reset_index(drop=True)
+# ============================================================
+# 3. Alle Modelle speichern
+# ============================================================
 
-    return model, metrics, feat_imp
-
-
-def predict_next_7_days(model, history_df: pd.DataFrame, zone: str) -> pd.DataFrame:
-    """
-    Predict the next 168 hours (7 days) using hour / day_of_week / month.
-    """
-    hist    = history_df[history_df["region"] == zone].copy()
-    last_dt = pd.to_datetime(hist["datetime"]).max()
-
-    future_rows = []
-    for step in range(168):
-        next_dt = last_dt + datetime.timedelta(hours=step + 1)
-
-        X = pd.DataFrame([{
-            "hour":        next_dt.hour,
-            "day_of_week": next_dt.weekday(),
-            "month":       next_dt.month,
-        }])
-
-        pred  = float(model.predict(X)[0])
-        lower = pred * 0.88
-        upper = pred * 1.12
-
-        future_rows.append({
-            "datetime":        next_dt,
-            "predicted_price": pred,
-            "lower_bound":     lower,
-            "upper_bound":     upper,
-            "zone":            zone,
-            "is_negative":     pred < 0,
-        })
-
-    result = pd.DataFrame(future_rows)
-    threshold       = result["predicted_price"].quantile(0.20)
-    result["is_cheap"] = result["predicted_price"] <= threshold
-    return result
-
-
-def find_optimal_production_windows(
-    forecast_df: pd.DataFrame,
-    production_hours_needed: float,
-    capacity_mw: float,
-) -> dict:
-    """
-    Pick the cheapest / greenest forecasted hours to run the electrolyser.
-    """
-    hours_needed = int(np.ceil(production_hours_needed))
-    optimal      = forecast_df.sort_values("predicted_price").head(hours_needed).sort_values("datetime")
-
-    avg_optimal  = float(optimal["predicted_price"].mean())
-    avg_baseline = float(forecast_df["predicted_price"].mean())
-
-    energy_mwh    = capacity_mw * hours_needed
-    cost_optimal  = avg_optimal  * energy_mwh
-    cost_baseline = avg_baseline * energy_mwh
-    savings_pct   = ((cost_baseline - cost_optimal) / max(abs(cost_baseline), 1)) * 100
-
-    return {
-        "optimal_schedule":   optimal,
-        "avg_price_optimal":  round(avg_optimal,  2),
-        "avg_price_baseline": round(avg_baseline, 2),
-        "savings_pct":        round(savings_pct,  1),
-        "cost_optimal_aud":   round(cost_optimal,  2),
-        "cost_baseline_aud":  round(cost_baseline, 2),
-        "hours_needed":       hours_needed,
-    }
+joblib.dump(modelle, "carbon_modelle.pkl")
+print("Alle Modelle gespeichert.")
