@@ -91,8 +91,11 @@ def get_cost_breakdown(
     if extra_costs is None:
         extra_costs = get_default_cost_items()
 
-    categories = ["Electricity"] + [item["name"] for item in extra_costs]
-    costs = [round(electricity_cost, 2)] + [item["cost_aud"] for item in extra_costs]
+    # Only include items with cost > 0 (setting to 0 removes them)
+    active_extras = [item for item in extra_costs if item["cost_aud"] > 0]
+
+    categories = ["Electricity"] + [item["name"] for item in active_extras]
+    costs = [round(electricity_cost, 2)] + [item["cost_aud"] for item in active_extras]
 
     return pd.DataFrame({
         "category": categories,
