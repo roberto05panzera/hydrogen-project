@@ -626,6 +626,70 @@ def get_optimizer_summary(
 
 
 # =====================================================================
+# 3b. CARBON INTENSITY DATA (from Electricity Maps API)
+# =====================================================================
+# Real data from CSV files in data/carbon_intensity/.
+# Each region has its own CSV with columns: datetime, carbon_intensity
+# The combined file has columns: region, region_datetime, carbon_intensity
+#
+# Carbon intensity is measured in gCO₂eq/kWh — grams of CO₂ equivalent
+# emitted per kilowatt-hour of electricity generated.  Lower = cleaner.
+
+# Map our region display names to the CSV file region codes
+_CARBON_REGION_MAP = {
+    "NSW": "AU-NSW",
+    "VIC": "AU-VIC",
+    "QLD": "AU-QLD",
+    "SA":  "AU-SA",
+    "TAS": "AU-TAS",
+}
+
+# Map region codes to the per-region CSV file paths
+_CARBON_CSV_FILES = {
+    "AU-NSW": os.path.join(os.path.dirname(__file__), "carbon_intensity", "carbon_nsw.csv"),
+    "AU-VIC": os.path.join(os.path.dirname(__file__), "carbon_intensity", "carbon_vic.csv"),
+    "AU-QLD": os.path.join(os.path.dirname(__file__), "carbon_intensity", "carbon_qld.csv"),
+    "AU-SA":  os.path.join(os.path.dirname(__file__), "carbon_intensity", "carbon_sa.csv"),
+    "AU-TAS": os.path.join(os.path.dirname(__file__), "carbon_intensity", "carbon_tas.csv"),
+}
+
+
+def get_carbon_intensity(region_abbr: str = "NSW", days: int = 30) -> pd.DataFrame:
+    """
+    Load carbon intensity data for a given NEM region.
+
+    Reads from the real CSV files collected via the Electricity Maps API.
+    Returns the most recent `days` worth of hourly data.
+
+    Parameters:
+        region_abbr: short region name, e.g. "NSW", "VIC", "QLD", "SA", "TAS"
+        days:        how many days of history to return (default 30)
+
+    Returns DataFrame with columns:
+        datetime (pd.Timestamp), carbon_intensity (float, gCO₂eq/kWh)
+    """
+    # Convert our region abbreviation to the API region code
+    region_code = _CARBON_REGION_MAP.get(region_abbr, "AU-NSW")
+
+    # Read the CSV for this region
+    csv_path = _CARBON_CSV_FILES.get(region_code)
+    try:
+        df = pd.read_csv(csv_path)
+        df["datetime"] = pd.to_datetime(df["datetime"])
+        df = df.sort_values("datetime")
+    except Exception:
+        # If the file doesn't exist or can't be read, return empty DataFrame
+        return pd.DataFrame(columns=["datetime", "carbon_intensity"])
+
+    # Return only the last N days of data
+    if len(df) > 0:
+        cutoff = df["datetime"].max() - pd.Timedelta(days=days)
+        df = df[df["datetime"] >= cutoff]
+
+    return df.reset_index(drop=True)
+
+
+# =====================================================================
 # 4. COST ANALYSIS PAGE
 # =====================================================================
 

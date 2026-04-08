@@ -22,7 +22,7 @@ from components import metric_card, dashboard_card, stats_row
 # get_forecast()           → dict with timestamps, actual, predicted,
 #                            lower/upper bounds, and metrics
 # get_feature_importance() → DataFrame with feature names and scores
-from data.sample_data import get_forecast, get_feature_importance
+from data.sample_data import get_forecast, get_feature_importance, get_carbon_intensity
 
 
 def render():
@@ -558,4 +558,180 @@ def render():
     dashboard_card(
         title=f"Feature Importance — {model_display}",
         content_func=draw_feature_importance,
+    )
+
+    # ==============================================================
+    # STEP 5: CARBON INTENSITY TREND
+    # ==============================================================
+    # A line chart showing the carbon intensity of the electricity
+    # grid (gCO₂eq/kWh) over time for the selected NEM region.
+    #
+    # This uses REAL data from the Electricity Maps API, stored in
+    # CSV files under data/carbon_intensity/.
+    #
+    # Why it matters: green hydrogen is only "green" if it's produced
+    # with low-carbon electricity.  This chart shows the user when
+    # the grid is cleanest, so they can time production accordingly.
+    #
+    # The data updates with the region selector in the sidebar.
+
+    # ── Get the selected region abbreviation ──
+    # The sidebar stores e.g. "New South Wales (NSW)" in session state.
+    # We extract just "NSW" for the data loader.
+    full_region = st.session_state.get("region", "New South Wales (NSW)")
+    region_short = full_region.split("(")[-1].replace(")", "").strip()
+
+    # ── Time range selector for carbon data ──
+    carbon_range = st.radio(
+        label="Carbon Intensity Period",
+        options=["7 days", "30 days", "90 days"],
+        index=1,                                       # default: 30 days
+        horizontal=True,
+        key="carbon_range_selector",
+    )
+
+    # Convert label to number of days
+    carbon_days = {"7 days": 7, "30 days": 30, "90 days": 90}[carbon_range]
+
+    # ── Fetch real carbon intensity data ──
+    carbon_df = get_carbon_intensity(
+        region_abbr=region_short,
+        days=carbon_days,
+    )
+
+    def draw_carbon_trend():
+        """
+        Draw a line chart of carbon intensity over time.
+
+        The y-axis shows gCO₂eq/kWh — grams of CO₂ equivalent
+        per kilowatt-hour of electricity.  Lower values mean the
+        grid is running on more renewables (good for green H₂).
+
+        Visual cues:
+          - A green zone below 200 gCO₂eq/kWh (very clean)
+          - A red zone above 600 gCO₂eq/kWh (fossil-heavy)
+          - The line itself shows hourly fluctuations
+        """
+
+        # Handle the case where no data is available
+        if carbon_df.empty:
+            st.markdown(
+                f'<div style="text-align:center;padding:2rem;'
+                f'color:{COLORS["text_muted"]};">'
+                f'No carbon intensity data available for {region_short}.'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+            return
+
+        fig_carbon = go.Figure()
+
+        # ── Green zone (low carbon, good for production) ──
+        # A semi-transparent green band from 0 to 200 gCO₂eq/kWh
+        fig_carbon.add_trace(go.Scatter(
+            x=[carbon_df["datetime"].iloc[0], carbon_df["datetime"].iloc[-1]],
+            y=[200, 200],
+            mode="lines",
+            line=dict(width=0),
+            showlegend=False,
+            hoverinfo="skip",
+        ))
+        fig_carbon.add_trace(go.Scatter(
+            x=[carbon_df["datetime"].iloc[0], carbon_df["datetime"].iloc[-1]],
+            y=[0, 0],
+            mode="lines",
+            line=dict(width=0),
+            fill="tonexty",                            # shade between 0 and 200
+            fillcolor="rgba(63,185,80,0.08)",          # semi-transparent green
+            showlegend=False,
+            hoverinfo="skip",
+        ))
+
+        # ── Carbon intensity line ──
+        fig_carbon.add_trace(go.Scatter(
+            x=carbon_df["datetime"],
+            y=carbon_df["carbon_intensity"],
+            mode="lines",
+            name="Carbon Intensity",
+            line=dict(color=COLORS["orange"], width=1.5),
+            hovertemplate=(
+                "<b>%{x|%a %d %b, %H:%M}</b><br>"
+                "%{y:.0f} gCO₂eq/kWh<br>"
+                "<extra></extra>"
+            ),
+        ))
+
+        # ── Chart styling ──
+        fig_carbon.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font=dict(color=COLORS["text_muted"], size=11),
+            margin=dict(l=50, r=20, t=20, b=40),
+            height=300,
+
+            xaxis=dict(
+                showgrid=False,
+                linecolor=COLORS["border"],
+                tickfont=dict(color=COLORS["text_muted"], size=10),
+            ),
+
+            yaxis=dict(
+                title="gCO₂eq/kWh",
+                title_font=dict(color=COLORS["text_muted"], size=10),
+                gridcolor=COLORS["border_light"],
+                gridwidth=0.5,
+                tickfont=dict(color=COLORS["text_muted"], size=10),
+                rangemode="tozero",                    # start y-axis at 0
+            ),
+
+            legend=dict(
+                orientation="h", yanchor="bottom", y=1.02,
+                xanchor="left", x=0, font=dict(size=10),
+            ),
+
+            hovermode="x unified",
+        )
+
+        st.plotly_chart(fig_carbon, use_container_width=True, key="carbon_trend_chart")
+
+    # ── KPI row: current carbon stats ──
+    # Show the latest value, the average, and the minimum (cleanest hour)
+    if not carbon_df.empty:
+        latest_carbon = carbon_df["carbon_intensity"].iloc[-1]
+        avg_carbon = carbon_df["carbon_intensity"].mean()
+        min_carbon = carbon_df["carbon_intensity"].min()
+
+        c_kpi1, c_kpi2, c_kpi3 = st.columns(3)
+
+        with c_kpi1:
+            # Latest carbon intensity — green if below 400, red if above
+            metric_card(
+                label="CURRENT",
+                value=f"{latest_carbon:.0f}",
+                subtitle="gCO₂eq/kWh",
+                color=COLORS["green"] if latest_carbon < 400 else COLORS["red"],
+            )
+
+        with c_kpi2:
+            # Average over the selected period
+            metric_card(
+                label=f"AVG ({carbon_range})",
+                value=f"{avg_carbon:.0f}",
+                subtitle="gCO₂eq/kWh",
+                color=COLORS["text_primary"],
+            )
+
+        with c_kpi3:
+            # Minimum (cleanest hour in the period)
+            metric_card(
+                label="CLEANEST HOUR",
+                value=f"{min_carbon:.0f}",
+                subtitle="gCO₂eq/kWh",
+                color=COLORS["green"],
+            )
+
+    # Wrap the chart in a dashboard card
+    dashboard_card(
+        title=f"Carbon Intensity — {region_short} ({carbon_range})",
+        content_func=draw_carbon_trend,
     )
