@@ -83,7 +83,7 @@ def render():
         metric_card(
             label="Cost / kg (Optimised)",
             value=f"${opt_cost_per_kg:.2f}",
-            sub=f'{summary["optimised"]["production_hours"]}h production',
+            subtitle=f'{summary["optimised"]["production_hours"]}h production',
         )
 
     # ── KPI 2: Naive cost per kg (24/7 baseline) ──
@@ -92,7 +92,7 @@ def render():
         metric_card(
             label="Cost / kg (24/7 Naive)",
             value=f"${naive_cost_per_kg:.2f}",
-            sub=f'{summary["naive"]["production_hours"]}h production',
+            subtitle=f'{summary["naive"]["production_hours"]}h production',
         )
 
     # ── KPI 3: Total electricity cost ──
@@ -101,7 +101,7 @@ def render():
         metric_card(
             label="Electricity Cost",
             value=f"${total_elec:,.0f}",
-            sub=f'avg ${summary["optimised"]["avg_elec_price"]:.1f}/MWh',
+            subtitle=f'avg ${summary["optimised"]["avg_elec_price"]:.1f}/MWh',
         )
 
     # ── KPI 4: Savings vs naive ──
@@ -111,7 +111,7 @@ def render():
         metric_card(
             label="Savings vs 24/7",
             value=f"${savings:,.0f}",
-            sub=f"{savings_pct:.1f}% reduction",
+            subtitle=f"{savings_pct:.1f}% reduction",
         )
 
     # Small spacer between KPIs and charts
