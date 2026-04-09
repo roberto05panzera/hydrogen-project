@@ -1,11 +1,15 @@
 """
-carbon_intensity_loader.py — Load carbon intensity data from Electricity Maps CSVs.
+carbon_intensity_loader.py — Load carbon intensity data from two sources.
 
-Previously this function lived in sample_data.py.  Now it has its own
-module so that price_forecast.py doesn't depend on sample_data at all.
+This module merges data from:
+  1. Historical CSV files (data/carbon_intensity/carbon_*.csv)
+     — Bulk data collected earlier, covering Oct 2025 – Apr 2026
+  2. Live 7-day API (data/carbon_intensity/carbon_intensity_API_past7d)
+     — Real-time data from the Electricity Maps API, last ~7 days
 
-The raw CSVs are in data/carbon_intensity/ and were collected via the
-Electricity Maps API (carbon_intensity_API_live_data.py).
+The live data supplements the CSVs so that the app always has the
+most recent carbon intensity readings.  If the API call fails or
+the module is unavailable, we gracefully fall back to CSV data only.
 
 Usage:
     from data.carbon_intensity_loader import get_carbon_intensity
@@ -46,15 +50,68 @@ _CARBON_CSV_FILES = {
 
 
 # =====================================================================
-# LOADER FUNCTION
+# LIVE 7-DAY API LOADER
+# =====================================================================
+
+def _load_live_carbon(region_abbr: str) -> pd.DataFrame:
+    """
+    Fetch the last 7 days of carbon intensity from the live API.
+
+    Uses the fetch_carbon_intensity_7d() function from the API module
+    in data/carbon_intensity/carbon_intensity_API_past7d.
+
+    Returns DataFrame with columns: datetime, carbon_intensity
+    Returns empty DataFrame if the API fails or module is unavailable.
+    """
+    try:
+        # Import the API module — it lives in a subfolder without .py extension
+        # so we use importlib to handle the unusual filename
+        import importlib.util
+        api_path = os.path.join(_CARBON_DIR, "carbon_intensity_API_past7d")
+
+        spec = importlib.util.spec_from_file_location(
+            "carbon_api_7d", api_path
+        )
+        api_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(api_module)
+
+        # Call the API function
+        result = api_module.fetch_carbon_intensity_7d(region_abbr)
+
+        # Check for errors
+        if "error" in result:
+            return pd.DataFrame(columns=["datetime", "carbon_intensity"])
+
+        # Convert the list of dicts to a DataFrame
+        records = result.get("data", [])
+        if not records:
+            return pd.DataFrame(columns=["datetime", "carbon_intensity"])
+
+        df = pd.DataFrame(records)
+        df["datetime"] = pd.to_datetime(df["datetime"])
+        df["carbon_intensity"] = pd.to_numeric(
+            df["carbon_intensity"], errors="coerce"
+        )
+        df = df.dropna(subset=["carbon_intensity"])
+
+        return df[["datetime", "carbon_intensity"]]
+
+    except Exception:
+        # If anything goes wrong (module not found, API key invalid,
+        # network error, etc.), fall back silently to CSV data
+        return pd.DataFrame(columns=["datetime", "carbon_intensity"])
+
+
+# =====================================================================
+# MAIN LOADER FUNCTION
 # =====================================================================
 
 def get_carbon_intensity(region_abbr: str = "NSW", days: int = 30) -> pd.DataFrame:
     """
     Load carbon intensity data for a given NEM region.
 
-    Reads from the real CSV files collected via the Electricity Maps API.
-    Returns the most recent `days` worth of hourly data.
+    Combines historical CSV data with live 7-day API data.  The live
+    data takes priority for any overlapping hours (it's more recent).
 
     Parameters:
         region_abbr: short region name, e.g. "NSW", "VIC", "QLD", "SA", "TAS"
@@ -64,22 +121,35 @@ def get_carbon_intensity(region_abbr: str = "NSW", days: int = 30) -> pd.DataFra
         datetime          (pd.Timestamp)  — hourly timestamp
         carbon_intensity  (float)         — gCO₂eq/kWh
     """
-    # Convert our region abbreviation to the API region code
+    # ── Load historical CSV data ──
     region_code = _CARBON_REGION_MAP.get(region_abbr, "AU-NSW")
-
-    # Read the CSV for this region
     csv_path = _CARBON_CSV_FILES.get(region_code)
+
     try:
-        df = pd.read_csv(csv_path)
-        df["datetime"] = pd.to_datetime(df["datetime"])
-        df = df.sort_values("datetime")
+        hist = pd.read_csv(csv_path)
+        hist["datetime"] = pd.to_datetime(hist["datetime"])
+        hist = hist.sort_values("datetime")
     except Exception:
-        # If the file doesn't exist or can't be read, return empty DataFrame
-        return pd.DataFrame(columns=["datetime", "carbon_intensity"])
+        hist = pd.DataFrame(columns=["datetime", "carbon_intensity"])
 
-    # Return only the last N days of data
-    if len(df) > 0:
-        cutoff = df["datetime"].max() - pd.Timedelta(days=days)
-        df = df[df["datetime"] >= cutoff]
+    # ── Load live 7-day API data ──
+    live = _load_live_carbon(region_abbr)
 
-    return df.reset_index(drop=True)
+    # ── Merge: live data overwrites overlapping historical hours ──
+    if not live.empty and not hist.empty:
+        # Remove historical rows that overlap with live data
+        hist = hist[~hist["datetime"].isin(live["datetime"])]
+        combined = pd.concat([hist, live], ignore_index=True)
+    elif not live.empty:
+        combined = live
+    else:
+        combined = hist
+
+    # Sort and filter to requested time range
+    combined = combined.sort_values("datetime")
+
+    if len(combined) > 0:
+        cutoff = combined["datetime"].max() - pd.Timedelta(days=days)
+        combined = combined[combined["datetime"] >= cutoff]
+
+    return combined.reset_index(drop=True)

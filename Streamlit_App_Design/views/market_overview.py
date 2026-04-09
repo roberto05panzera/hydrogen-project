@@ -26,8 +26,25 @@ from data.market_overview_model import (
     get_regional_prices,
 )
 
-# News/alerts still from sample_data — news API not yet connected
-from data.sample_data import get_market_alerts
+
+# ── Placeholder alerts (news API not yet connected) ──
+# These were previously in sample_data.py.  Once the news API is live,
+# replace this function with real API calls.
+
+def get_market_alerts() -> list[dict]:
+    """Placeholder market alerts until the news API is connected."""
+    return [
+        {"time": "14:32", "severity": "warning",
+         "message": "SA region negative pricing expected next 4 hours"},
+        {"time": "13:15", "severity": "info",
+         "message": "Wind generation forecast upgraded for VIC (+1.2 GW)"},
+        {"time": "12:01", "severity": "success",
+         "message": "Optimal production window detected: 15:00–21:00 AEST"},
+        {"time": "09:45", "severity": "error",
+         "message": "QLD interconnector constraint — prices may spike"},
+        {"time": "08:30", "severity": "info",
+         "message": "BOM severe weather warning: potential solar curtailment SA"},
+    ]
 
 
 def region_abbr() -> str:
