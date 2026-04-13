@@ -5,16 +5,15 @@ This module reads TWO data sources and merges them:
 
   1. Historical AEMO CSVs (PRICE_AND_DEMAND_YYYYMM_REGION.csv)
      - Monthly 5-minute interval data downloaded in bulk
-     - Columns: REGION, SETTLEMENTDATE, TOTALDEMAND, RRP, PERIODTYPE
+     - Used for ML training and as a fallback when the API is down
 
-  2. Live 7-day API data ("7 days elec price.csv")
-     - Produced by 3days_Prices_WA&NEM.py via the OpenElectricity API
-     - Columns: region_code, date, price
-     - Refreshed on demand; covers the most recent ~7 days
+  2. Live 7-day prices fetched directly from the OpenElectricity API
+     - Fetched on every app load (cached for 1 hour)
+     - Provides current market prices for the dashboard
 
 The live data supplements the historical CSVs so that the app always
-has near-real-time prices.  If the live CSV doesn't exist yet (API
-not run), the loader gracefully falls back to historical data only.
+has near-real-time prices.  If the API call fails, the loader
+gracefully falls back to historical data only.
 
 We aggregate everything to hourly averages because:
   - 5-minute data is too noisy for visualisation
@@ -22,18 +21,24 @@ We aggregate everything to hourly averages because:
   - Charts load faster with ~8,700 rows/year vs ~105,000
 
 Usage in any page:
-    from data.electricity_prices_loader import load_prices
+    from data.electricity_prices_loader import load_prices, load_live_prices
 
 Data files:
     data/electricity_prices/PRICE_AND_DEMAND_YYYYMM_REGION.csv  (historical)
-    data/electricity_prices/7 days elec price.csv                (live API)
 """
 
 import os
 import glob
+from datetime import datetime, timezone, timedelta
+
 import pandas as pd
+import requests
 import streamlit as st
 
+
+# =====================================================================
+# CONFIGURATION
+# =====================================================================
 
 # Directory where the AEMO CSV files are stored
 _PRICES_DIR = os.path.join(os.path.dirname(__file__), "electricity_prices")
@@ -47,108 +52,180 @@ _REGION_FILE_CODES = {
     "TAS": "TAS1",
 }
 
-# Map the live API region codes (e.g. "AU-NSW") back to our short names.
-# The 3d price API uses the Electricity Maps convention for region codes.
-_LIVE_API_REGION_MAP = {
-    "AU-NSW": "NSW",
-    "AU-VIC": "VIC",
-    "AU-QLD": "QLD",
-    "AU-SA":  "SA",
-    "AU-TAS": "TAS",
-    "AU-WA":  "WA",
+# Map NEM sub-region codes (from the API) back to our short names
+_NEM_REGION_MAP = {
+    "NSW1": "NSW",
+    "VIC1": "VIC",
+    "QLD1": "QLD",
+    "SA1":  "SA",
+    "TAS1": "TAS",
 }
 
-# Path to the live 7-day price CSV produced by the API script
-_LIVE_CSV_PATH = os.path.join(_PRICES_DIR, "7 days elec price.csv")
+# OpenElectricity API config
+_OE_API_KEY = "oe_DYiKF1FeoE9VzmEPNuzUCV"
+_OE_BASE_URL = "https://api.openelectricity.org.au/v4/market/network"
 
 
-def _load_live_prices(region_abbr: str) -> pd.DataFrame:
+# =====================================================================
+# LIVE API FETCH — self-contained, no external script dependency
+# =====================================================================
+
+@st.cache_data(ttl=3600, show_spinner="Fetching live prices from AEMO...")
+def _fetch_live_prices_from_api() -> pd.DataFrame:
     """
-    Load live 7-day prices from the API CSV for one region.
+    Fetch the last 7 days of 5-minute NEM prices directly from the
+    OpenElectricity API and return hourly averages for ALL regions.
 
-    The API script (3days_Prices_WA&NEM.py) writes a single CSV with
-    all regions combined.  We filter to the requested region and
-    aggregate from 5-minute to hourly averages.
-
-    Parameters:
-        region_abbr: short region name, e.g. "NSW", "VIC"
+    Cached for 1 hour (ttl=3600) so we don't hit the API on every
+    Streamlit rerun.
 
     Returns DataFrame with columns:
         timestamp      (datetime, hourly)
         price_aud_mwh  (float, hourly average)
-    Returns empty DataFrame if the CSV doesn't exist or has no data.
+        region         (str, e.g. "NSW", "TAS")
+
+    Returns empty DataFrame if the API call fails.
     """
-    if not os.path.exists(_LIVE_CSV_PATH):
-        return pd.DataFrame(columns=["timestamp", "price_aud_mwh"])
+    now_utc = datetime.now(timezone.utc)
+    start_utc = now_utc - timedelta(days=7)
 
     try:
-        live = pd.read_csv(_LIVE_CSV_PATH)
-    except Exception:
-        return pd.DataFrame(columns=["timestamp", "price_aud_mwh"])
+        resp = requests.get(
+            f"{_OE_BASE_URL}/NEM",
+            headers={"Authorization": f"Bearer {_OE_API_KEY}"},
+            params={
+                "interval": "5m",
+                "metrics": "price",
+                "primary_grouping": "network_region",
+                "with_clerk": "true",
+                "start": start_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "end":   now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            },
+            timeout=30,
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        # Store the error so the UI can show it
+        st.session_state["_api_error"] = str(e)
+        return pd.DataFrame(columns=["timestamp", "price_aud_mwh", "region"])
 
-    # The CSV has columns: region_code, date, price
-    # region_code uses the API format (e.g. "AU-NSW")
-    if "region_code" not in live.columns or "date" not in live.columns:
-        return pd.DataFrame(columns=["timestamp", "price_aud_mwh"])
+    # Parse the nested JSON response
+    rows = []
+    try:
+        api_data = resp.json().get("data", [])
+        for top_item in api_data:
+            for result in top_item.get("results", []):
+                nem_code = result.get("columns", {}).get("region")
+                region = _NEM_REGION_MAP.get(nem_code)
+                if region is None:
+                    continue
+                for ts_str, price in result.get("data", []):
+                    if price is None or ts_str is None:
+                        continue
+                    rows.append({
+                        "timestamp": ts_str,
+                        "price": float(price),
+                        "region": region,
+                    })
+    except Exception as e:
+        st.session_state["_api_error"] = f"Parse error: {e}"
+        return pd.DataFrame(columns=["timestamp", "price_aud_mwh", "region"])
 
-    # Map the API region code back to our short abbreviation
-    live["region_short"] = live["region_code"].map(_LIVE_API_REGION_MAP)
+    if not rows:
+        st.session_state["_api_error"] = "API returned no price data"
+        return pd.DataFrame(columns=["timestamp", "price_aud_mwh", "region"])
 
-    # Filter to the requested region
-    region_data = live[live["region_short"] == region_abbr].copy()
-    if region_data.empty:
-        return pd.DataFrame(columns=["timestamp", "price_aud_mwh"])
+    # Convert to DataFrame and aggregate to hourly
+    df = pd.DataFrame(rows)
+    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+    df["timestamp"] = df["timestamp"].dt.tz_localize(None)   # strip tz for consistency
+    df["hour"] = df["timestamp"].dt.floor("h")
 
-    # Parse timestamps and aggregate to hourly
-    region_data["timestamp"] = pd.to_datetime(region_data["date"])
-    region_data["hour"] = region_data["timestamp"].dt.floor("h")
-    region_data["price"] = pd.to_numeric(region_data["price"], errors="coerce")
-
-    hourly = region_data.groupby("hour").agg(
+    hourly = df.groupby(["hour", "region"]).agg(
         price_aud_mwh=("price", "mean"),
     ).reset_index()
     hourly.rename(columns={"hour": "timestamp"}, inplace=True)
     hourly["price_aud_mwh"] = hourly["price_aud_mwh"].round(2)
 
+    # Clear any previous error
+    st.session_state.pop("_api_error", None)
+
     return hourly
 
 
-@st.cache_data(ttl=3600, show_spinner="Refreshing live prices from AEMO API...")
-def _refresh_live_prices_from_api():
+def load_live_prices(region_abbr: str = "NSW") -> pd.DataFrame:
     """
-    Call the OpenElectricity API to fetch 7 days of price data and
-    write it to the CSV.  Cached for 1 hour (ttl=3600) so we don't
-    hit the API on every page load or interaction.
+    Get live 7-day prices for ONE region from the API.
 
-    This replaces the old workflow where 3days_Prices_WA&NEM.py had
-    to be run manually as a separate script.
+    This is the public function called by Market Overview and other
+    pages that want current prices.
 
-    We use importlib because the filename starts with a digit ('3days_...')
-    which makes a normal 'from ... import' statement impossible in Python.
+    Returns DataFrame with columns:
+        timestamp      (datetime, hourly)
+        price_aud_mwh  (float)
+
+    Returns empty DataFrame if the API call fails.
     """
-    try:
-        import importlib.util
-        module_path = os.path.join(_PRICES_DIR, "3days_Prices_WA_NEM.py")
-        spec = importlib.util.spec_from_file_location("prices_api", module_path)
-        api_module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(api_module)
-        api_module.retrieve_all_data()
-        return True
-    except Exception as e:
-        print(f"⚠ Live price refresh failed: {e}")
-        return False
+    all_live = _fetch_live_prices_from_api()
+
+    if all_live.empty:
+        return pd.DataFrame(columns=["timestamp", "price_aud_mwh"])
+
+    region_data = all_live[all_live["region"] == region_abbr].copy()
+    return region_data[["timestamp", "price_aud_mwh"]].reset_index(drop=True)
 
 
-def load_prices(region_abbr: str = "NSW") -> pd.DataFrame:
+# =====================================================================
+# HISTORICAL CSV LOADER
+# =====================================================================
+
+def _load_historical_prices(region_abbr: str = "NSW") -> pd.DataFrame:
     """
     Load and concatenate all AEMO price CSVs for a given NEM region,
     then aggregate from 5-minute intervals to hourly averages.
 
-    If a live 7-day API CSV exists, its data is merged in so that the
-    most recent hours are always available.  Live data overwrites any
-    overlapping historical hours (live is fresher).
+    Parameters:
+        region_abbr: short region name, e.g. "NSW", "VIC"
 
-    Automatically refreshes the live CSV via the API (cached for 1 hour).
+    Returns DataFrame with columns:
+        timestamp       (datetime, hourly)
+        price_aud_mwh   (float, hourly average)
+        demand_gw       (float, hourly average in GW)
+    """
+    file_code = _REGION_FILE_CODES.get(region_abbr, "NSW1")
+    pattern = os.path.join(_PRICES_DIR, f"PRICE_AND_DEMAND_*_{file_code}.csv")
+    csv_files = sorted(glob.glob(pattern))
+
+    if not csv_files:
+        return pd.DataFrame(columns=["timestamp", "price_aud_mwh", "demand_gw"])
+
+    frames = [pd.read_csv(f) for f in csv_files]
+    raw = pd.concat(frames, ignore_index=True)
+
+    raw["timestamp"] = pd.to_datetime(raw["SETTLEMENTDATE"])
+    raw["hour"] = raw["timestamp"].dt.floor("h")
+
+    hourly = raw.groupby("hour").agg(
+        price_aud_mwh=("RRP", "mean"),
+        demand_mw=("TOTALDEMAND", "mean"),
+    ).reset_index()
+    hourly.rename(columns={"hour": "timestamp"}, inplace=True)
+    hourly["demand_gw"] = (hourly["demand_mw"] / 1000).round(2)
+    hourly.drop(columns=["demand_mw"], inplace=True)
+    hourly["price_aud_mwh"] = hourly["price_aud_mwh"].round(2)
+
+    return hourly
+
+
+# =====================================================================
+# COMBINED LOADER — historical + live
+# =====================================================================
+
+def load_prices(region_abbr: str = "NSW") -> pd.DataFrame:
+    """
+    Load ALL available price data: historical CSVs + live API.
+
+    Live API data takes priority for overlapping timestamps.
 
     Parameters:
         region_abbr: short region name, e.g. "NSW", "VIC", "QLD", "SA", "TAS"
@@ -156,72 +233,24 @@ def load_prices(region_abbr: str = "NSW") -> pd.DataFrame:
     Returns DataFrame with columns:
         timestamp       (datetime, hourly)
         price_aud_mwh   (float, hourly average RRP in AUD/MWh)
-        demand_gw       (float, hourly average total demand in GW)
+        demand_gw       (float, hourly average total demand in GW — NaN for live data)
     """
-    # Automatically refresh the live 7-day CSV from the API.
-    # This is cached for 1 hour so repeated page loads don't re-fetch.
-    _refresh_live_prices_from_api()
+    # Load historical from CSVs
+    hist = _load_historical_prices(region_abbr)
 
-    # Get the AEMO file code for this region (e.g. "NSW" → "NSW1")
-    file_code = _REGION_FILE_CODES.get(region_abbr, "NSW1")
-
-    # Find all CSV files matching this region using a glob pattern
-    # e.g. PRICE_AND_DEMAND_202501_NSW1.csv, PRICE_AND_DEMAND_202502_NSW1.csv, ...
-    pattern = os.path.join(_PRICES_DIR, f"PRICE_AND_DEMAND_*_{file_code}.csv")
-    csv_files = sorted(glob.glob(pattern))
-
-    # ── Load historical AEMO data ──
-    if csv_files:
-        # Read and concatenate all monthly CSVs into one big DataFrame
-        frames = []
-        for f in csv_files:
-            df = pd.read_csv(f)
-            frames.append(df)
-        raw = pd.concat(frames, ignore_index=True)
-
-        # Parse the settlement date column into proper datetime objects
-        raw["timestamp"] = pd.to_datetime(raw["SETTLEMENTDATE"])
-
-        # Floor each timestamp to the hour (e.g. 14:35 → 14:00)
-        # This groups all 5-minute intervals within each hour together
-        raw["hour"] = raw["timestamp"].dt.floor("h")
-
-        # Aggregate: average price and demand per hour
-        hourly = raw.groupby("hour").agg(
-            price_aud_mwh=("RRP", "mean"),             # average price
-            demand_mw=("TOTALDEMAND", "mean"),          # average demand in MW
-        ).reset_index()
-
-        # Rename the hour column to timestamp for consistency
-        hourly.rename(columns={"hour": "timestamp"}, inplace=True)
-
-        # Convert demand from MW to GW (divide by 1000) for cleaner display
-        hourly["demand_gw"] = (hourly["demand_mw"] / 1000).round(2)
-        hourly.drop(columns=["demand_mw"], inplace=True)
-
-        # Round price to 2 decimal places
-        hourly["price_aud_mwh"] = hourly["price_aud_mwh"].round(2)
-    else:
-        hourly = pd.DataFrame(columns=["timestamp", "price_aud_mwh", "demand_gw"])
-
-    # ── Load live 7-day API data (if available) ──
-    # The live CSV is produced by 3days_Prices_WA&NEM.py and contains
-    # the most recent ~7 days of 5-minute data from the OpenElectricity API.
-    live = _load_live_prices(region_abbr)
+    # Fetch live 7-day data from the API
+    live = load_live_prices(region_abbr)
 
     if not live.empty:
-        # The live data doesn't include demand, so set it to NaN
         live["demand_gw"] = float("nan")
 
-        # Merge: live data takes priority for overlapping hours.
-        # We remove any historical rows whose timestamp also appears
-        # in the live data, then append the live rows.
-        if not hourly.empty:
-            hourly = hourly[~hourly["timestamp"].isin(live["timestamp"])]
+        # Remove historical rows that overlap with live data
+        if not hist.empty:
+            hist = hist[~hist["timestamp"].isin(live["timestamp"])]
 
-        hourly = pd.concat([hourly, live], ignore_index=True)
+        combined = pd.concat([hist, live], ignore_index=True)
+    else:
+        combined = hist
 
-    # Sort chronologically
-    hourly = hourly.sort_values("timestamp").reset_index(drop=True)
-
-    return hourly
+    combined = combined.sort_values("timestamp").reset_index(drop=True)
+    return combined

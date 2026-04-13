@@ -336,6 +336,20 @@ def draw_indicator_modal():
 def render():
     """Draw the Market Overview page.  Called by app.py."""
 
+    # ── Check live API status and show banner if data is stale ──
+    from data.electricity_prices_loader import load_live_prices
+    live_df = load_live_prices(region_abbr())
+    api_error = st.session_state.get("_api_error")
+
+    if live_df.empty and api_error:
+        st.warning(
+            f"⚠ Live price API unavailable — showing historical data. "
+            f"Error: {api_error}",
+            icon="⚠️",
+        )
+    elif live_df.empty:
+        st.info("ℹ Loading live prices... If this persists, the API may be down.")
+
     # ==============================================================
     # STEP 1: KPI ROW — four metric cards across the top
     # ==============================================================
@@ -519,7 +533,31 @@ def render():
     )
 
     # ==============================================================
-    # STEP 4 — SECONDARY ROW: Heatmap + Regional Comparison
+    # STEP 4 — NEWS / ALERTS CARD (moved up so it's visible)
+    # ==============================================================
+    # Full-width card showing recent hydrogen market news.
+    # Each alert is drawn with alert_item() from components.py.
+
+    alerts = get_market_alerts()   # list of dicts with time, severity, message
+
+    def draw_alerts():
+        if not alerts:
+            st.caption("No news articles found. The Mediastack API may be unreachable.")
+            return
+        for alert in alerts:
+            alert_item(
+                time=alert["time"],
+                severity=alert["severity"],
+                message=alert["message"],
+            )
+
+    dashboard_card(
+        title="Market Alerts & News",
+        content_func=draw_alerts,
+    )
+
+    # ==============================================================
+    # STEP 5 — SECONDARY ROW: Heatmap + Regional Comparison
     # ==============================================================
     # Two cards side by side:
     #   Left  → Price heatmap (hour-of-day vs day-of-week)
@@ -654,31 +692,4 @@ def render():
             content_func=draw_regional_bar,
         )
 
-    # ==============================================================
-    # STEP 5 — NEWS / ALERTS CARD
-    # ==============================================================
-    # A full-width card at the bottom that lists recent market alerts.
-    # Each alert is drawn with alert_item() from components.py, which
-    # shows a coloured dot (green/yellow/red/blue) next to the message.
-
-    alerts = get_market_alerts()   # list of dicts with time, severity, message
-
-    def draw_alerts():
-        """
-        Loop through all alerts and draw each one using the
-        alert_item() component.  Each alert has:
-          - time:     when it happened (e.g. "14:32")
-          - severity: "success", "warning", "error", or "info"
-          - message:  what happened
-        """
-        for alert in alerts:
-            alert_item(
-                time=alert["time"],
-                severity=alert["severity"],
-                message=alert["message"],
-            )
-
-    dashboard_card(
-        title="Market Alerts & News",
-        content_func=draw_alerts,
-    )
+    # (News card was moved to Step 4 above so it's visible without scrolling)
