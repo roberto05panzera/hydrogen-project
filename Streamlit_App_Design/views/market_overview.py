@@ -31,21 +31,36 @@ from data.market_overview_model import (
 from data.news.news_fetcher import get_hydrogen_news
 
 
-@st.cache_data(ttl=1800, show_spinner=False)  # cache for 30 min (free tier has limits)
 def get_market_alerts() -> list[dict]:
     """
     Fetch real hydrogen news via the Mediastack API and format them
     as alert items for the dashboard.
 
-    Falls back to a placeholder message if the API returns nothing
-    (e.g. no articles published today, or API limit reached).
+    NOT using @st.cache_data so that failures are retried on every
+    page load.  Successes are manually cached in session_state for
+    30 min to respect the free-tier API limit.
     """
+    # ── Manual cache: only cache successful results ──
+    cache_key = "_news_cache"
+    cache_ts_key = "_news_cache_ts"
+    cached = st.session_state.get(cache_key)
+    cached_ts = st.session_state.get(cache_ts_key)
+
+    if cached is not None and cached_ts is not None:
+        from datetime import datetime, timezone
+        age = (datetime.now(timezone.utc) - cached_ts).total_seconds()
+        if age < 1800 and len(cached) > 0:
+            return cached  # Return cached SUCCESS (< 30 min old)
+        # If cached was empty (failure), fall through and retry
+
     articles = get_hydrogen_news(max_keywords=3, max_articles=5)
 
     if not articles:
+        # Store diagnostic info
+        st.session_state["_news_error"] = "No articles returned"
         return [
             {"time": "—", "severity": "info",
-             "message": "No hydrogen news found for today. Check back later."},
+             "message": "No hydrogen news found this week. Check back later."},
         ]
 
     alerts = []
@@ -61,6 +76,12 @@ def get_market_alerts() -> list[dict]:
             "severity": "info",
             "message": a["title"] or "Untitled article",
         })
+
+    # Cache success
+    from datetime import datetime, timezone
+    st.session_state.pop("_news_error", None)
+    st.session_state[cache_key] = alerts
+    st.session_state[cache_ts_key] = datetime.now(timezone.utc)
 
     return alerts
 

@@ -8,6 +8,8 @@ It does three things:
   2. Builds the sidebar (navigation, region selector, timeframe, status)
   3. Routes to the correct page based on the user's sidebar selection
 
+CODE VERSION: 2026-04-13-v4 (fixed API params + enhanced diagnostics)
+
 All visual styling is handled by style.py (imported below).
 All reusable UI components live in components.py.
 Each page has its own file in the pages/ folder.
@@ -134,22 +136,25 @@ with st.sidebar:
     st.session_state["timeframe"] = timeframe
 
     # ── Spacer ──
-    # Push the status indicator to the bottom of the sidebar.
-    # We add some vertical space with empty markdown lines.
     st.markdown("<br>" * 4, unsafe_allow_html=True)
 
-    # ── API Status Indicator ──
-    # Shows whether the data connection is live or using sample data.
-    # For now it always shows "Sample Data" since we haven't connected
-    # the real APIs yet.  Change this once the API team is done.
-    using_live_api = True  # APIs now connected: AEMO prices, carbon intensity, news
+    # ── Version stamp (helps verify the right code is running) ──
+    st.caption("Code: v4 · 2026-04-13")
 
-    if using_live_api:
+    # ── API Status Indicator (dynamic — checks real API data) ──
+    from data.electricity_prices_loader import load_live_prices
+    live_df = load_live_prices("NSW")
+    api_error = st.session_state.get("_api_error")
+
+    if not live_df.empty:
         status_color = COLORS["green"]
-        status_text = "API Connected"
+        status_text = f"API Live ({len(live_df)} hrs)"
+    elif api_error:
+        status_color = COLORS["red"]
+        status_text = "API Error"
     else:
         status_color = COLORS["yellow"]
-        status_text = "Sample Data"
+        status_text = "Historical Only"
 
     st.markdown(
         f"""
@@ -165,6 +170,81 @@ with st.sidebar:
         """,
         unsafe_allow_html=True,
     )
+
+    # ── API Diagnostics (expandable — for debugging) ──
+    with st.expander("API Diagnostics", expanded=False):
+        if api_error:
+            st.error(f"Price API: {api_error}")
+        elif not live_df.empty:
+            st.success(f"Price API: {len(live_df)} hours of live data")
+        else:
+            st.warning("Price API: No data returned (no error recorded)")
+
+        # Show which params were used on last API call
+        params_used = st.session_state.get("_api_params_used")
+        if params_used:
+            st.caption(f"Params used: {params_used}")
+        rows_parsed = st.session_state.get("_api_rows_parsed")
+        if rows_parsed is not None:
+            st.caption(f"Rows parsed: {rows_parsed}")
+        json_keys = st.session_state.get("_api_json_keys")
+        if json_keys:
+            st.caption(f"JSON keys: {json_keys}")
+
+        # Quick connectivity test button
+        if st.button("Test Price API Now", key="test_api"):
+            import requests
+            try:
+                from datetime import datetime, timezone, timedelta
+                now = datetime.now(timezone.utc)
+                start = now - timedelta(hours=6)
+                resp = requests.get(
+                    "https://api.openelectricity.org.au/v4/market/network/NEM",
+                    headers={"Authorization": "Bearer oe_DYiKF1FeoE9VzmEPNuzUCV"},
+                    params={
+                        "interval": "5m",
+                        "metrics": "price",
+                        "primaryGrouping": "network_region",
+                        "dateStart": start.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        "dateEnd":   now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    },
+                    timeout=15,
+                )
+                st.code(f"Status: {resp.status_code}\nBody (first 500 chars):\n{resp.text[:500]}")
+            except Exception as e:
+                st.error(f"Request failed: {e}")
+
+        st.divider()
+
+        # ── News API diagnostics ──
+        news_error = st.session_state.get("_news_error")
+        news_status = st.session_state.get("_news_api_status")
+        news_preview = st.session_state.get("_news_api_preview")
+
+        if news_error:
+            st.warning(f"News API: {news_error}")
+        if news_status:
+            st.caption(f"News HTTP status: {news_status}")
+        if news_preview:
+            st.caption(f"News response: {news_preview[:200]}")
+
+        # Quick news test button
+        if st.button("Test News API Now", key="test_news"):
+            import requests as _req
+            try:
+                _resp = _req.get(
+                    "http://api.mediastack.com/v1/news",
+                    params={
+                        "access_key": "cfd9b9b3f23e9a769b6725c0f7bc480c",
+                        "keywords": "green hydrogen",
+                        "languages": "en",
+                        "limit": 3,
+                    },
+                    timeout=10,
+                )
+                st.code(f"Status: {_resp.status_code}\nBody:\n{_resp.text[:500]}")
+            except Exception as e:
+                st.error(f"News request failed: {e}")
 
 
 # ── 4. Top Bar ──────────────────────────────────────────────────────
