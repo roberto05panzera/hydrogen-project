@@ -25,6 +25,7 @@ def add_cost_dialog():
 
 def render_cost_breakdown():
     st.subheader("Full Cost Breakdown")
+    st.caption("Add extra costs manually or upload an Excel file.")
 
     if "extra_cost_items" not in st.session_state:
         st.session_state.extra_cost_items = []
@@ -32,12 +33,17 @@ def render_cost_breakdown():
     if "uploaded_excel_name" not in st.session_state:
         st.session_state.uploaded_excel_name = ""
 
+    has_electricity_cost = "total_cost_aud" in st.session_state
     total_cost_aud = st.session_state.get("total_cost_aud", 0.0)
 
-    m1, m2, m3 = st.columns(3)
     extra_total = sum(item["amount"] for item in st.session_state.extra_cost_items)
     grand_total = total_cost_aud + extra_total
-    m1.metric("Electricity Cost", f"AUD {total_cost_aud:,.2f}")
+
+    m1, m2, m3 = st.columns(3)
+    m1.metric(
+        "Electricity Cost",
+        f"AUD {total_cost_aud:,.2f}" if has_electricity_cost else "Not available yet",
+    )
     m2.metric("Additional Costs", f"AUD {extra_total:,.2f}")
     m3.metric("Grand Total", f"AUD {grand_total:,.2f}")
 
@@ -57,18 +63,24 @@ def render_cost_breakdown():
     if uploaded_file is not None and uploaded_file.name != st.session_state.uploaded_excel_name:
         try:
             df = pd.read_excel(uploaded_file)
+
             if "Cost Item" in df.columns and "Amount (AUD)" in df.columns:
                 for _, row in df.iterrows():
                     label = str(row["Cost Item"]).strip()
                     if label:
                         st.session_state.extra_cost_items.append(
-                            {"label": label, "amount": float(row["Amount (AUD)"])}
+                            {
+                                "label": label,
+                                "amount": float(row["Amount (AUD)"]),
+                            }
                         )
+
                 st.session_state.uploaded_excel_name = uploaded_file.name
                 st.success(f"Uploaded {uploaded_file.name}")
                 st.rerun()
             else:
                 st.error('Excel file must contain "Cost Item" and "Amount (AUD)" columns.')
+
         except Exception as e:
             st.error(f"Error reading Excel file: {e}")
 
@@ -76,6 +88,7 @@ def render_cost_breakdown():
 
     with left:
         st.markdown("### Current Items")
+
         if not st.session_state.extra_cost_items:
             st.write("No extra cost items yet.")
         else:
@@ -89,14 +102,31 @@ def render_cost_breakdown():
 
     with right:
         st.markdown("### Cost Donut Chart")
-        labels = ["Electricity Cost"] + [item["label"] for item in st.session_state.extra_cost_items]
-        values = [total_cost_aud] + [item["amount"] for item in st.session_state.extra_cost_items]
 
-        fig = go.Figure(data=[go.Pie(labels=labels, values=values, hole=0.6)])
-        fig.update_layout(height=420, margin=dict(t=20, b=20, l=20, r=20))
-        st.plotly_chart(fig, use_container_width=True)
+        labels = []
+        values = []
+
+        if has_electricity_cost:
+            labels.append("Electricity Cost")
+            values.append(total_cost_aud)
+
+        for item in st.session_state.extra_cost_items:
+            labels.append(item["label"])
+            values.append(item["amount"])
+
+        if values:
+            fig = go.Figure(
+                data=[go.Pie(labels=labels, values=values, hole=0.6)]
+            )
+            fig.update_layout(height=420, margin=dict(t=20, b=20, l=20, r=20))
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("No cost data to display yet.")
 
 
 st.set_page_config(page_title="Block 6 Test", layout="wide")
-st.session_state.setdefault("total_cost_aud", 0.0)
+
+# Remove this line later when Block 4 is connected
+# st.session_state["total_cost_aud"] = 1850.75
+
 render_cost_breakdown()
