@@ -33,16 +33,16 @@ def render_cost_breakdown():
     if "uploaded_excel_name" not in st.session_state: #same thing as extra_cost_item, but checks for excel. 
         st.session_state.uploaded_excel_name = "" #empty strng. Its teh one showing up after one uplaods it. 
 
-    has_electricity_cost = "total_cost_aud" in st.session_state #checks if electricity cost value already exists in memry. 
-    total_cost_aud = st.session_state.get("total_cost_aud", 0.0) #if it does not exist, it starts by 0
+    has_electricity_cost = "total_cost_au" in st.session_state #checks if electricity cost value already exists in memry. 
+    total_cost_au = st.session_state.get("total_cost_au", 0.0) #if it does not exist, it starts by 0
 
     extra_total = sum(item["amount"] for item in st.session_state.extra_cost_items)
-    grand_total = total_cost_aud + extra_total
+    grand_total = total_cost_au + extra_total
 
     m1, m2, m3 = st.columns(3)
     m1.metric(
         "Electricity Cost",
-        f"AUD {total_cost_aud:,.2f}" if has_electricity_cost else "Not available yet",
+        f"AUD {total_cost_au:,.2f}" if has_electricity_cost else "Not available yet",
     )
     m2.metric("Additional Costs", f"AUD {extra_total:,.2f}")
     m3.metric("Grand Total", f"AUD {grand_total:,.2f}")
@@ -108,7 +108,7 @@ def render_cost_breakdown():
 
         if has_electricity_cost:
             labels.append("Electricity Cost")
-            values.append(total_cost_aud)
+            values.append(total_cost_au)
 
         for item in st.session_state.extra_cost_items:
             labels.append(item["label"])
