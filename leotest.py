@@ -3,38 +3,38 @@ import plotly.graph_objects as go
 import streamlit as st
 
 
-@st.dialog("Add Cost Item")
-def add_cost_dialog():
-    label = st.text_input("Cost Item", placeholder="e.g. Water Cost")
-    amount = st.number_input("Amount (AUD)", min_value=0.0, step=100.0, format="%.2f")
+@st.dialog("Add Cost Item") #Opens a popup dialog titled 'add cost item'
+def add_cost_dialog(): 
+    label = st.text_input("Cost Item", placeholder="e.g. Water Cost") # label and amount are where the user inout takes place. as variables the store whatever is typed in teh box 
+    amount = st.number_input("Amount (AUD)", min_value=0.0, step=100.0, format="%.2f") 
 
-    c1, c2 = st.columns(2)
-    with c1:
-        if st.button("Save", use_container_width=True):
-            if label.strip():
+    c1, c2 = st.columns(2) #creates 2 columns next to eachother, and storse them in variables c1 and c2
+    with c1: #firzt item inside column 1 
+        if st.button("Save", use_container_width=True): #Button that if clicked, runs the code 
+            if label.strip(): #No check if  the button is empty. Returns "clean" string by removing spaces.  # in this case, ython echecks whetehre there is still text after removing spaces. If the answer is yes, python assigns teh cost name to label and the number (value AUD) to teh "amount" variable. 
                 st.session_state.extra_cost_items.append(
                     {"label": label.strip(), "amount": amount}
-                )
-                st.rerun()
+                ) #adds teh data label and amount to the list of extra cost items. 
+                st.rerun() # reloads the app and the list appears on screen. 
             else:
-                st.warning("Please enter a cost item name.")
+                st.warning("Please enter a cost item name.") #if no text is left, warning message appears.
     with c2:
         if st.button("Cancel", use_container_width=True):
-            st.rerun()
+            st.rerun() # refreshes the app, which closes the dialog without saving anything. Script is basically started from teh top. 
 
 
-def render_cost_breakdown():
-    st.subheader("Full Cost Breakdown")
-    st.caption("Add extra costs manually or upload an Excel file.")
+def render_cost_breakdown(): 
+    st.subheader("Full Cost Breakdown") # both are just text, and give instructions. There is no user interaction here
+    st.caption("Add extra costs manually or upload an Excel file.") 
 
-    if "extra_cost_items" not in st.session_state:
+    if "extra_cost_items" not in st.session_state: #Python checks whether session_state already has items called extra_cost_items If it does not exist, that means the app has no saved list for extra cost. then the next line creates it as an e,mpty öost, so the app can store itsms inside it. 
         st.session_state.extra_cost_items = []
 
-    if "uploaded_excel_name" not in st.session_state:
-        st.session_state.uploaded_excel_name = ""
+    if "uploaded_excel_name" not in st.session_state: #same thing as extra_cost_item, but checks for excel. 
+        st.session_state.uploaded_excel_name = "" #empty strng. Its teh one showing up after one uplaods it. 
 
-    has_electricity_cost = "total_cost_aud" in st.session_state
-    total_cost_aud = st.session_state.get("total_cost_aud", 0.0)
+    has_electricity_cost = "total_cost_aud" in st.session_state #checks if electricity cost value already exists in memry. 
+    total_cost_aud = st.session_state.get("total_cost_aud", 0.0) #if it does not exist, it starts by 0
 
     extra_total = sum(item["amount"] for item in st.session_state.extra_cost_items)
     grand_total = total_cost_aud + extra_total
@@ -127,6 +127,5 @@ def render_cost_breakdown():
 st.set_page_config(page_title="Block 6 Test", layout="wide")
 
 # Remove this line later when Block 4 is connected
-# st.session_state["total_cost_aud"] = 1850.75
 
 render_cost_breakdown()
